@@ -1,15 +1,17 @@
+import streamlit as st
 from flask import Flask, request, Response
 from twilio.twiml.messaging_response import MessagingResponse
 import sqlite3
 import random
+import threading
 import os
 
-app = Flask(__name__)
+# -----------------------------
+# Flask app setup
+# -----------------------------
+flask_app = Flask(__name__)
 DB = "sampark.db"
 
-# -----------------------------
-# Database setup
-# -----------------------------
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -26,9 +28,6 @@ def init_db():
 
 init_db()
 
-# -----------------------------
-# Helper response generator
-# -----------------------------
 def generate_response(user_message):
     user_message = user_message.lower().strip()
     if "side effect" in user_message:
@@ -45,17 +44,13 @@ def generate_response(user_message):
         ]
         return random.choice(options)
 
-# -----------------------------
-# WhatsApp webhook
-# -----------------------------
-@app.route("/incoming", methods=["POST"])
+@flask_app.route("/incoming", methods=["POST"])
 def incoming_sms():
     try:
         sender = request.form.get("From")
         message = request.form.get("Body")
         response_text = generate_response(message)
 
-        # Save to DB
         conn = sqlite3.connect(DB)
         c = conn.cursor()
         c.execute("INSERT INTO messages (sender, message, response) VALUES (?, ?, ?)",
@@ -63,7 +58,6 @@ def incoming_sms():
         conn.commit()
         conn.close()
 
-        # Twilio reply
         resp = MessagingResponse()
         resp.message(response_text)
         return Response(str(resp), mimetype="application/xml")
@@ -71,17 +65,48 @@ def incoming_sms():
     except Exception as e:
         return str(e), 500
 
-# -----------------------------
-# Root endpoint
-# -----------------------------
-@app.route("/")
+@flask_app.route("/")
 def index():
-    return "✅ Flask WhatsApp Bot is running!"
+    return "✅ Flask WhatsApp Bot is running (inside Streamlit)!"
 
 # -----------------------------
-# Run app (dynamic port fix)
+# Run Flask in a background thread
 # -----------------------------
-if __name__ == "__main__":
-    import os
+def run_flask():
     port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    flask_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+thread = threading.Thread(target=run_flask, daemon=True)
+thread.start()
+
+# -----------------------------
+# Streamlit Frontend
+# -----------------------------
+st.set_page_config(page_title="Wegovy WhatsApp Bot", page_icon="💬", layout="centered")
+
+st.title("💬 Wegovy (Semaglutide) Doctor Assistant Chatbot")
+st.markdown("""
+This Streamlit app runs a Flask server in the background that listens for incoming **Twilio WhatsApp messages**.  
+Use the webhook URL below in your **Twilio Sandbox settings** 👇
+""")
+
+st.code("https://<your-streamlit-app-url>/incoming", language="bash")
+
+# Display stored messages
+if os.path.exists(DB):
+    conn = sqlite3.connect(DB)
+    df = None
+    try:
+        df = conn.execute("SELECT * FROM messages ORDER BY id DESC LIMIT 10").fetchall()
+    finally:
+        conn.close()
+
+    if df:
+        st.subheader("📜 Recent Conversations")
+        for row in df:
+            _, sender, msg, resp = row
+            st.write(f"**{sender}:** {msg}")
+            st.write(f"**Bot:** {resp}")
+            st.markdown("---")
+    else:
+        st.info("No messages received yet.")
